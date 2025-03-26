@@ -2,285 +2,269 @@ import streamlit as st
 import time
 import os
 import json
-import tempfile
 import subprocess
+from typing import List, Dict, Optional
+import logging
 
-# Set up constants
-MODELFILE_TEMPLATE = '''FROM {base_model}
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# sets the temperature to {temperature} [higher is more creative, lower is more coherent]
-PARAMETER temperature {temperature}
-# sets the context window size to {context_window}, this controls how many tokens the LLM can use as context to generate the next token
-PARAMETER num_ctx {context_window}
+# Constants
+OLLAMA_API_URL = "http://localhost:11434/api"
+DEFAULT_BASE_MODEL = "llama2"
+DEFAULT_TEMPERATURE = 0.7
+DEFAULT_CONTEXT_WINDOW = 4096
 
-# sets a custom system message to specify the behavior of the chat assistant
-SYSTEM "You are an AI assistant specializing in local AI development. Provide detailed, informative, and varied responses to user queries."
+# Model purpose presets
+MODEL_PRESETS = {
+    "creative_writing": {
+        "temperature": 0.9,
+        "context_window": 4096,
+        "description": "Higher temperature for more creative outputs"
+    },
+    "technical_documentation": {
+        "temperature": 0.3,
+        "context_window": 4096,
+        "description": "Lower temperature for more precise and consistent outputs"
+    },
+    "data_analysis": {
+        "temperature": 0.2,
+        "context_window": 8192,
+        "description": "Low temperature and larger context for handling data patterns"
+    },
+    "conversation": {
+        "temperature": 0.7,
+        "context_window": 4096,
+        "description": "Balanced temperature for natural dialogue"
+    },
+    "code_generation": {
+        "temperature": 0.4,
+        "context_window": 8192,
+        "description": "Moderate temperature and larger context for code generation"
+    },
+    "custom": {
+        "temperature": 0.7,
+        "context_window": 4096,
+        "description": "Custom settings for specific needs"
+    }
+}
 
-# Training examples
-{training_data}'''
+# Initialize session state
+if 'current_model' not in st.session_state:
+    st.session_state.current_model = None
+if 'chat_history1' not in st.session_state:
+    st.session_state.chat_history1 = []
+if 'chat_history2' not in st.session_state:
+    st.session_state.chat_history2 = []
+if 'model_purpose' not in st.session_state:
+    st.session_state.model_purpose = None
+if 'custom_parameters' not in st.session_state:
+    st.session_state.custom_parameters = False
 
-def format_training_data(data):
-    """Format raw text data into Ollama's expected training format."""
-    formatted_data = []
-    # Split data into chunks (assuming each chunk is separated by double newlines)
-    chunks = data.strip().split('\n\n')
-    
-    for chunk in chunks:
-        # Split chunk into user and assistant parts (assuming they're separated by a newline)
-        parts = chunk.strip().split('\n')
-        if len(parts) >= 2:
-            user_msg = parts[0].strip().replace('"', '\\"')
-            assistant_msg = '\n'.join(parts[1:]).strip().replace('"', '\\"')
-            formatted_data.append(f'TEMPLATE """Human: {user_msg}\nAssistant: {assistant_msg}"""')
-    
-    return '\n\n'.join(formatted_data)
-
-def get_model_response(model_name, prompt):
-    """Get response from a model."""
+def get_available_models() -> List[str]:
+    """Get list of available Ollama models."""
     try:
-        cmd = ['ollama', 'run', model_name, prompt]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
         if result.returncode == 0:
-            return result.stdout.strip()
+            lines = result.stdout.strip().split('\n')
+            models = []
+            for line in lines[1:]:  # Skip header line
+                if line.strip():
+                    model_name = line.split()[0]
+                    models.append(model_name)
+            return models
+        else:
+            st.error(f"Error getting models: {result.stderr}")
+            return []
+    except Exception as e:
+        st.error(f"Error getting models: {str(e)}")
+        return []
+
+def get_model_response(model: str, prompt: str) -> str:
+    """Get response from a model using the Ollama API."""
+    try:
+        data = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False
+        }
+        
+        result = subprocess.run(
+            ['curl', '-X', 'POST', f'{OLLAMA_API_URL}/generate', 
+             '-H', 'Content-Type: application/json',
+             '-d', json.dumps(data)],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            response = json.loads(result.stdout)
+            return response.get('response', 'No response received')
         else:
             return f"Error: {result.stderr}"
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error getting response: {str(e)}"
 
-def generate_synthetic_data(model_name, topic_prompt, num_examples=10):
-    """Generate synthetic training data using a local model."""
-    generation_prompt = f"""Generate {num_examples} training examples about {topic_prompt}. 
-Each example should be a question-answer pair about {topic_prompt}.
-Format each example as:
-Question
-Detailed answer
-
-Separate each example with a blank line.
-Make questions diverse but focused on {topic_prompt}.
-Keep answers clear, direct, and informative."""
-
+def create_custom_model(model_name: str, base_model: str, system_prompt: str, temperature: float, context_window: int) -> bool:
+    """Create a custom model with specific parameters."""
     try:
-        response = get_model_response(model_name, generation_prompt)
-        return response.strip()
+        # Escape any quotes in the system prompt and wrap it in quotes
+        escaped_prompt = system_prompt.replace('"', '\\"')
+        modelfile_content = f'''FROM {base_model}
+PARAMETER temperature {temperature}
+PARAMETER num_ctx {context_window}
+SYSTEM "{escaped_prompt}"'''
+
+        with open('Modelfile', 'w') as f:
+            f.write(modelfile_content)
+
+        result = subprocess.run(
+            ['ollama', 'create', model_name, '-f', 'Modelfile'],
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode == 0:
+            st.success(f"Successfully created model: {model_name}")
+            return True
+        else:
+            st.error(f"Error creating model: {result.stderr}")
+            return False
     except Exception as e:
-        return f"Error generating synthetic data: {str(e)}"
+        st.error(f"Error creating model: {str(e)}")
+        return False
 
-st.title("Fine-Tune & Chat with Your Ollama Models")
+def generate_system_prompt(purpose: str, task_description: str) -> str:
+    """Generate a system prompt based on the user's purpose and description."""
+    return f"""You are an AI assistant specialized in {purpose}. 
+Your primary focus is on: {task_description}
+Your responses should be focused, relevant, and helpful for this specific purpose.
+Always maintain a professional and knowledgeable tone while being clear and concise."""
 
-# Query available models from Ollama
-try:
-    result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
-    available_models = [line.split()[0] for line in result.stdout.strip().split('\n')[1:]]
-except Exception as e:
-    available_models = []
-    st.error(f"Error fetching models from Ollama: {e}")
-
-if not available_models:
-    st.warning("No local models found via Ollama. Please ensure you have models loaded.")
-else:
-    # Let the user select from the available models
-    selected_model = st.selectbox("Select a base model", available_models)
-
-# Create tabs for Training and Chat
-tab_train, tab_chat = st.tabs(["Train Model", "Chat with Model"])
-
-# ----------------------------
-# TRAINING TAB
-# ----------------------------
-with tab_train:
-    st.header("Fine Tune Your Selected Model")
+def main():
+    st.title("Local AI Model Customizer")
     
-    # Model configuration
+    # Sidebar for model creation
+    with st.sidebar:
+        st.header("Create Custom Model")
+        
+        # Model name input
+        model_name = st.text_input("Enter model name", "custom_model")
+        
+        # Base model selection
+        base_model = st.selectbox(
+            "Select base model",
+            get_available_models() or [DEFAULT_BASE_MODEL],
+            index=0
+        )
+        
+        # Purpose selection
+        st.subheader("What kind of work will you do with this model?")
+        purpose_type = st.selectbox(
+            "Select the primary purpose",
+            list(MODEL_PRESETS.keys()),
+            format_func=lambda x: x.replace('_', ' ').title()
+        )
+        
+        # Show preset description
+        st.info(MODEL_PRESETS[purpose_type]["description"])
+        
+        # Task description
+        task_description = st.text_area(
+            "Describe your specific task or use case",
+            "e.g., Writing technical blog posts about machine learning",
+            height=100
+        )
+        
+        # Parameter customization
+        st.subheader("Model Parameters")
+        if purpose_type == "custom":
+            temperature = st.slider(
+                "Temperature (creativity vs. precision)",
+                0.0, 1.0,
+                MODEL_PRESETS[purpose_type]["temperature"],
+                0.1,
+                help="Higher values make output more creative, lower values more precise"
+            )
+            context_window = st.select_slider(
+                "Context Window",
+                options=[2048, 4096, 8192, 16384],
+                value=MODEL_PRESETS[purpose_type]["context_window"],
+                help="Larger values allow the model to consider more context"
+            )
+        else:
+            temperature = MODEL_PRESETS[purpose_type]["temperature"]
+            context_window = MODEL_PRESETS[purpose_type]["context_window"]
+            st.write(f"Temperature: {temperature}")
+            st.write(f"Context Window: {context_window}")
+        
+        # Preview system prompt
+        if task_description:
+            system_prompt = generate_system_prompt(purpose_type, task_description)
+            with st.expander("Preview System Prompt"):
+                st.text(system_prompt)
+        
+        # Create model button
+        if st.button("Create Custom Model"):
+            if task_description:
+                system_prompt = generate_system_prompt(purpose_type, task_description)
+                if create_custom_model(model_name, base_model, system_prompt, temperature, context_window):
+                    st.session_state.current_model = model_name
+                    st.rerun()
+            else:
+                st.warning("Please describe your specific use case.")
+    
+    # Main content area - Chat interface
+    st.header("Chat Interface")
+    
+    # Model selection for comparison
     col1, col2 = st.columns(2)
+    
     with col1:
-        temperature = st.slider("Temperature", min_value=0.0, max_value=2.0, value=0.7, step=0.1)
-        context_window = st.number_input("Context Window Size", min_value=512, max_value=8192, value=2048, step=512)
+        model1 = st.selectbox(
+            "Select Model 1",
+            get_available_models(),
+            index=0
+        )
     
     with col2:
-        new_model_name = st.text_input("New Model Name", value="my-custom-model")
-        system_prompt = st.text_area("System Prompt", value="You are a helpful AI assistant. ")
+        model2 = st.selectbox(
+            "Select Model 2",
+            get_available_models(),
+            index=1
+        )
+    
+    # Chat interface
+    st.subheader("Chat")
+    
+    # Display chat history
+    for i in range(len(st.session_state.chat_history1)):
+        with st.container():
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write(f"**User:** {st.session_state.chat_history1[i]['user']}")
+                st.write(f"**{model1}:** {st.session_state.chat_history1[i]['response']}")
+            
+            with col2:
+                st.write(f"**User:** {st.session_state.chat_history2[i]['user']}")
+                st.write(f"**{model2}:** {st.session_state.chat_history2[i]['response']}")
+    
+    # User input
+    user_input = st.text_input("Enter your message:")
+    
+    if st.button("Send Message") and user_input:
+        # Get responses from both models
+        response1 = get_model_response(model1, user_input)
+        response2 = get_model_response(model2, user_input)
+        
+        # Update chat histories
+        st.session_state.chat_history1.append({"user": user_input, "response": response1})
+        st.session_state.chat_history2.append({"user": user_input, "response": response2})
+        
+        # Rerun to update the display
+        st.rerun()
 
-    # Data source selection
-    data_source = st.radio("Choose Training Data Source", ["Upload File", "Generate Synthetic Data"])
-    
-    training_data = None
-    
-    if data_source == "Upload File":
-        # File uploader for training data
-        uploaded_file = st.file_uploader("Upload your training data (txt)", type=["txt"])
-        if uploaded_file is not None:
-            training_data = uploaded_file.read().decode("utf-8")
-            st.session_state.current_training_data = training_data
-    else:
-        # Synthetic data generation
-        st.subheader("Generate Synthetic Training Data")
-        
-        # Filter out the selected base model from available models for generation
-        generation_models = [m for m in available_models if m != selected_model]
-        if not generation_models:
-            st.warning("No other models available for synthetic data generation.")
-        else:
-            gen_model = st.selectbox("Select Model for Generation", generation_models)
-            topic_prompt = st.text_area("Topic for Training Examples", 
-                value="early childhood development milestones and assessment methods")
-            num_examples = st.number_input("Number of Examples", min_value=1, max_value=50, value=10)
-            
-            if st.button("Generate Training Data"):
-                with st.spinner("Generating synthetic training data..."):
-                    generated_data = generate_synthetic_data(gen_model, topic_prompt, num_examples)
-                    if not generated_data.startswith("Error"):
-                        st.session_state.current_training_data = generated_data
-                        training_data = generated_data
-                    else:
-                        st.error(generated_data)
-    
-    # Use the training data from session state if available
-    if not training_data and 'current_training_data' in st.session_state:
-        training_data = st.session_state.current_training_data
-    
-    # Preview and process training data
-    if training_data:
-        st.write("Data preview:")
-        st.text(training_data[:500] + "..." if len(training_data) > 500 else training_data)
-        
-        # Show formatted data preview
-        formatted_data = format_training_data(training_data)
-        with st.expander("Preview Formatted Training Data"):
-            st.text(formatted_data[:500] + "..." if len(formatted_data) > 500 else formatted_data)
-        
-        # Show complete Modelfile preview
-        with st.expander("Preview Complete Modelfile"):
-            modelfile_content = MODELFILE_TEMPLATE.format(
-                base_model=selected_model,
-                temperature=temperature,
-                context_window=context_window,
-                system_prompt=system_prompt.strip(),
-                training_data=formatted_data
-            )
-            
-            # Debug: Log the Modelfile content
-            st.write("Modelfile Content Debug:")
-            st.text(modelfile_content)  # Display the Modelfile content
-        
-        # Create a column for the fine-tuning button
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            create_model = st.button("Create Fine-Tuned Model")
-        
-        # Start the training process
-        if create_model:
-            st.write("Creating fine-tuned model...")
-            
-            try:
-                # Create temporary Modelfile
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.modelfile', delete=False) as f:
-                    modelfile_content = MODELFILE_TEMPLATE.format(
-                        base_model=selected_model,
-                        temperature=temperature,
-                        context_window=context_window,
-                        system_prompt=system_prompt.strip(),
-                        training_data=formatted_data
-                    )
-                    f.write(modelfile_content)
-                    modelfile_path = f.name
-                
-                # Show the exact content being written to the file
-                st.write("Modelfile content:")
-                st.text(modelfile_content)
-                
-                # Create the model using ollama create
-                create_cmd = ['ollama', 'create', new_model_name, '-f', modelfile_path]
-                result = subprocess.run(create_cmd, capture_output=True, text=True)
-                
-                if result.returncode == 0:
-                    st.success(f"Successfully created model: {new_model_name}")
-                    st.session_state.current_model = new_model_name
-                    # Clear the training data from session state after successful model creation
-                    if 'current_training_data' in st.session_state:
-                        del st.session_state.current_training_data
-                else:
-                    st.error(f"Error creating model: {result.stderr}")
-                    st.error("Command output:")
-                    st.text(result.stdout)
-                
-                # Clean up temporary file
-                os.unlink(modelfile_path)
-                
-            except Exception as e:
-                st.error(f"Error during model creation: {str(e)}")
-                
-        # Add a clear data button
-        if st.button("Clear Training Data"):
-            if 'current_training_data' in st.session_state:
-                del st.session_state.current_training_data
-            st.rerun()
-
-# ----------------------------
-# CHAT TAB
-# ----------------------------
-with tab_chat:
-    st.header("Compare Models")
-    
-    # Select models to chat with
-    try:
-        result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
-        chat_models = [line.split()[0] for line in result.stdout.strip().split('\n')[1:]]
-    except Exception as e:
-        chat_models = []
-        st.error(f"Error fetching models: {e}")
-    
-    if chat_models:
-        # Create two columns for model selection
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Model 1")
-            model1 = st.selectbox("Select first model", chat_models, key="model1")
-        
-        with col2:
-            st.subheader("Model 2")
-            model2 = st.selectbox("Select second model", chat_models, key="model2")
-        
-        # Initialize chat histories if they don't exist
-        if "chat_history1" not in st.session_state:
-            st.session_state.chat_history1 = []
-        if "chat_history2" not in st.session_state:
-            st.session_state.chat_history2 = []
-        
-        # Display chat histories side by side
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write(f"**Chat with {model1}**")
-            for entry in st.session_state.chat_history1:
-                st.write(f"**You:** {entry['user']}")
-                st.write(f"**{model1}:** {entry['response']}")
-        
-        with col2:
-            st.write(f"**Chat with {model2}**")
-            for entry in st.session_state.chat_history2:
-                st.write(f"**You:** {entry['user']}")
-                st.write(f"**{model2}:** {entry['response']}")
-        
-        # User input
-        user_input = st.text_input("Enter your message:")
-        
-        if st.button("Send Message") and user_input:
-            # Get responses from both models
-            response1 = get_model_response(model1, user_input)
-            response2 = get_model_response(model2, user_input)
-            
-            # Update chat histories
-            st.session_state.chat_history1.append({"user": user_input, "response": response1})
-            st.session_state.chat_history2.append({"user": user_input, "response": response2})
-            
-            # Rerun to update the display
-            st.rerun()
-            
-        # Add a clear button to reset chat histories
-        if st.button("Clear Chat History"):
-            st.session_state.chat_history1 = []
-            st.session_state.chat_history2 = []
-            st.rerun()
-    else:
-        st.warning("No models available for chat. Please create a model first.")
+if __name__ == "__main__":
+    main()
