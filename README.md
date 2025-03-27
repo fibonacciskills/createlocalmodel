@@ -1,11 +1,9 @@
-# Ollama Model Fine-Tuning UI
+# Ollama Model Custom Assistants
 
-A Streamlit-based web interface for fine-tuning and comparing [Ollama](https://ollama.ai/) models. This tool provides an intuitive interface for creating custom models through fine-tuning, generating synthetic training data, and comparing model responses.
+A Streamlit-based web interface for customizing and comparing models available through [Ollama](https://ollama.ai/). This tool provides an intuitive interface for creating custom model assistants through adjusting model parameters and system messages and chatting with the new model. 
 
 ## Features
 
-- 🎯 Fine-tune Ollama models with custom training data
-- 🤖 Generate synthetic training data using existing models
 - 📊 Side-by-side model comparison interface
 - 🔄 Real-time model response previews
 - 📝 Custom system prompt configuration
