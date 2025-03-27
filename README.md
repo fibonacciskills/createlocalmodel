@@ -43,7 +43,9 @@ streamlit run main.py
 
 2. Access the web interface at `http://localhost:8501`
 
-### Fine-Tuning a Model
+![Screenshot 2025-03-26 at 9 36 00 AM](https://github.com/user-attachments/assets/abdae95d-1178-43db-a07f-45d7d4053083)
+
+### Customizing a Model
 
 1. Select a base model from the dropdown menu
 2. Configure model parameters:
@@ -52,19 +54,12 @@ streamlit run main.py
    - Model Name (for your fine-tuned version)
    - System Prompt (defines model behavior)
 
-3. Choose your training data source:
-   - **Upload File**: Upload a text file with training examples
-   - **Generate Synthetic Data**: Create training data using an existing model
-     - Select a generation model
-     - Specify the topic
-     - Choose number of examples
-
-4. Review the previews:
+3. Review the previews:
    - Training data preview
    - Formatted data structure
    - Complete Modelfile content
 
-5. Click "Create Fine-Tuned Model" to start the fine-tuning process
+4. Click "Create Custom Model" to start the fine-tuning process
 
 ### Comparing Models
 
@@ -73,25 +68,13 @@ streamlit run main.py
 3. Enter your prompt in the text input
 4. View responses side-by-side
 
-## Training Data Format
-
-Training data should be formatted as question-answer pairs, separated by newlines:
-```
-Question 1
-Answer 1
-
-Question 2
-Answer 2
-```
-
 ## Technical Details
 
-This tool uses Ollama's model creation API to perform fine-tuning. The process involves:
+This tool uses Ollama's model creation API to perform creation. The process involves:
 
 1. Creating a Modelfile with:
    - Base model specification
    - System prompt
-   - Training examples in TEMPLATE format
    - Model parameters
 
 2. Using Ollama's create command to generate a new model based on the Modelfile
@@ -103,8 +86,6 @@ For more information about Ollama's fine-tuning capabilities:
 
 ## Limitations
 
-- Fine-tuning is performed using Ollama's built-in capabilities
-- Training data size may affect model performance
 - Model creation time varies based on hardware and base model size
 
 ## Contributing
@@ -114,3 +95,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details. 
+
+
